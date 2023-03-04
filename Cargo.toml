@@ -1,0 +1,27 @@
+[package]
+name = "bookmarks"
+authors = ["ThatsNoMoon <git@thatsnomoon.dev>"]
+license = "AGPL-3.0"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+cfg-if = "1.0.0"
+console_error_panic_hook = { version = "0.1.7", optional = true }
+ed25519-dalek = { version = "1.0.1", default-features = false, features = ["u64_backend", "std"] }
+hex = "0.4.3"
+reqwest = "0.11.14"
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = "1.0.93"
+twilight-model = "0.15.1"
+twilight-util = { version = "0.15.1", features = ["builder"] }
+worker = "0.0.13"
+
+[profile.release]
+opt-level = "s"
