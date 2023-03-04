@@ -61,6 +61,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 						kind: InteractionResponseType::Pong,
 						data: None,
 					};
+					console_log!("Ping received");
 					Response::from_json(&resp)
 				}
 				InteractionType::ApplicationCommand => {
@@ -73,6 +74,8 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 							)
 						}
 					};
+
+					console_log!(r#"Command "{}" received"#, data.name);
 
 					let user = interaction
 						.member
@@ -97,6 +100,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 						}
 					};
 
+					console_log!(
+						r#"Message component "{}" received"#,
+						data.custom_id
+					);
+
 					if data.custom_id == "delete" {
 						let channel_id = interaction
 							.channel_id
@@ -119,6 +127,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 			}
 		})
 		.post_async("/register", |_, ctx| async move {
+			console_log!("Registering commands");
 			register_bookmark_command(ctx).await
 		})
 		.run(req, env)
@@ -159,10 +168,9 @@ async fn bookmark<D>(
 
 	let author = {
 		let avatar_url = match message.author.avatar {
-			Some(hash) => format!(
-				"{CDN}/avatars/{}/{}.webp",
-				message.author.id, hash
-			),
+			Some(hash) => {
+				format!("{CDN}/avatars/{}/{}.webp", message.author.id, hash)
+			}
 
 			None => format!(
 				"{CDN}/embed/avatars/{}.png",
@@ -216,10 +224,8 @@ async fn bookmark<D>(
 	let (dm_channel, sent_msg) =
 		Client::new(ctx)?.send_dm(user.id, &bookmark).await?;
 
-	let sent_link = format!(
-		"{DISCORD}/channels/@me/{}/{}",
-		dm_channel.id, sent_msg.id
-	);
+	let sent_link =
+		format!("{DISCORD}/channels/@me/{}/{}", dm_channel.id, sent_msg.id);
 
 	let response = InteractionResponse {
 		kind: InteractionResponseType::ChannelMessageWithSource,
