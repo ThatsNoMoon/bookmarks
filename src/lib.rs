@@ -1,4 +1,3 @@
-use client::Client;
 use ed25519_dalek::{ed25519::signature::Signature, PublicKey, Verifier};
 use twilight_model::{
 	application::{
@@ -9,15 +8,15 @@ use twilight_model::{
 		},
 	},
 	channel::message::MessageFlags,
-	guild::PartialMember,
 	http::interaction::{InteractionResponse, InteractionResponseType},
-	id::{marker::GuildMarker, Id},
+	user::User,
 };
 use twilight_util::builder::{
 	command::CommandBuilder, InteractionResponseDataBuilder,
 };
-use utils::Context as _;
 use worker::*;
+
+use crate::{client::Client, utils::Context as _};
 
 mod client;
 mod utils;
@@ -59,7 +58,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 						kind: InteractionResponseType::Pong,
 						data: None,
 					};
-					Response::ok(serde_json::to_string(&resp)?)
+					Response::from_json(&resp)
 				}
 				InteractionType::ApplicationCommand => {
 					let data = match interaction.data {
@@ -72,24 +71,29 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 						}
 					};
 
-					let member =
-						interaction.member.context("No user provided")?;
+					let member = interaction
+						.member
+						.context("No member provided")?
+						.user
+						.context("Member contained no user")?;
 
-					handle_command(*data, member).await
+					handle_command(*data, member, ctx).await
 				}
 				_ => Response::error("Unexpected interaction type", 400),
 			}
 		})
-		.post_async("/register/*guild", |_, ctx| async move {
-			register_command(ctx).await
-		})
+		.post_async(
+			"/register",
+			|_, ctx| async move { register_command(ctx).await },
+		)
 		.run(req, env)
 		.await
 }
 
-async fn handle_command(
+async fn handle_command<D>(
 	command: CommandData,
-	_user: PartialMember,
+	user: User,
+	ctx: RouteContext<D>,
 ) -> Result<Response> {
 	match &*command.name {
 		COMMAND_NAME => (),
@@ -107,10 +111,12 @@ async fn handle_command(
 
 	let resolved = command.resolved.context("No resolved data")?;
 
-	let _message = resolved
+	let message = resolved
 		.messages
 		.get(&target.cast())
 		.context("No resolved message")?;
+
+	Client::new(ctx)?.send_dm(user.id, message).await?;
 
 	let response = InteractionResponse {
 		kind: InteractionResponseType::ChannelMessageWithSource,
@@ -164,28 +170,11 @@ fn verify_signature(
 }
 
 async fn register_command<D>(ctx: RouteContext<D>) -> Result<Response> {
-	let guild_id = ctx
-		.param("guild")
-		.and_then(|s| s.strip_prefix('/'))
-		.filter(|s| !s.is_empty())
-		.map(|s| s.parse::<Id<GuildMarker>>())
-		.transpose()
-		.context("Invalid ID")?;
-
-	let id = ctx
-		.var("DISCORD_APPLICATION_ID")?
-		.to_string()
-		.parse()
-		.map_err(|e| {
-			Error::RustError(format!("Failed to parse application id: {e}"))
-		})?;
-
-	let mut client = Client::new(ctx.var("DISCORD_TOKEN")?.to_string(), id);
 	let command = CommandBuilder::new(COMMAND_NAME, "", CommandType::Message)
 		.dm_permission(false)
 		.build();
 
-	if let Err(e) = client.create_commands(vec![command], guild_id).await {
+	if let Err(e) = Client::new(ctx)?.create_commands(vec![command]).await {
 		console_error!("Failed to create command: {e}");
 		Response::error("Failed to create command", 500)
 	} else {
