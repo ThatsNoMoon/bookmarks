@@ -6,6 +6,8 @@ use twilight_model::{
 };
 use worker::Error;
 
+use crate::utils::Context as _;
+
 const URL_BASE: &str = "https://discord.com/api/v10";
 
 pub(crate) struct Client {
@@ -23,9 +25,9 @@ impl Client {
 		}
 	}
 
-	pub(crate) async fn create_command(
+	pub(crate) async fn create_commands(
 		&mut self,
-		command: Command,
+		commands: Vec<Command>,
 		guild_id: Option<Id<GuildMarker>>,
 	) -> Result<(), Error> {
 		let url = match guild_id {
@@ -35,7 +37,18 @@ impl Client {
 			),
 			None => format!("{URL_BASE}/applications/{}/commands", self.id),
 		};
-		self.send(Method::PUT, url, command).await?;
+
+		let res = self.send(Method::PUT, url, commands).await?;
+
+		if res.status().is_client_error() {
+			return Err(Error::RustError(
+				res.text()
+					.await
+					.context("Failed to get error from Discord")?,
+			));
+		}
+
+		res.error_for_status().context("Discord error")?;
 
 		Ok(())
 	}

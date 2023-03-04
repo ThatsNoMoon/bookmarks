@@ -9,9 +9,9 @@ use twilight_model::{
 		},
 	},
 	channel::message::MessageFlags,
+	guild::PartialMember,
 	http::interaction::{InteractionResponse, InteractionResponseType},
 	id::{marker::GuildMarker, Id},
-	user::User,
 };
 use twilight_util::builder::{
 	command::CommandBuilder, InteractionResponseDataBuilder,
@@ -72,9 +72,10 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 						}
 					};
 
-					let user = interaction.user.context("No user provided")?;
+					let member =
+						interaction.member.context("No user provided")?;
 
-					handle_command(*data, user).await
+					handle_command(*data, member).await
 				}
 				_ => Response::error("Unexpected interaction type", 400),
 			}
@@ -86,7 +87,10 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 		.await
 }
 
-async fn handle_command(command: CommandData, _user: User) -> Result<Response> {
+async fn handle_command(
+	command: CommandData,
+	_user: PartialMember,
+) -> Result<Response> {
 	match &*command.name {
 		COMMAND_NAME => (),
 		c => return Err(Error::RustError(format!("Unknown command {c}"))),
@@ -118,7 +122,7 @@ async fn handle_command(command: CommandData, _user: User) -> Result<Response> {
 		),
 	};
 
-	Response::ok(serde_json::to_string(&response)?)
+	Response::from_json(&response)
 }
 
 fn check_signature<D>(
@@ -127,7 +131,7 @@ fn check_signature<D>(
 	ctx: &RouteContext<D>,
 ) -> Result<Result<()>> {
 	let public_key = ctx.var("DISCORD_PUBLIC_KEY")?.to_string();
-	let public_key = hex::decode(&public_key).context("Non-hex public key")?;
+	let public_key = hex::decode(public_key).context("Non-hex public key")?;
 	let public_key =
 		PublicKey::from_bytes(&public_key).context("Invalid public key")?;
 	Ok(verify_signature(req, body, public_key))
@@ -148,7 +152,7 @@ fn verify_signature(
 		.headers()
 		.get("X-Signature-Ed25519")?
 		.context("No signature")?;
-	let signature = hex::decode(&signature).context("Non-hex signature")?;
+	let signature = hex::decode(signature).context("Non-hex signature")?;
 	let signature =
 		Signature::from_bytes(&signature).context("Invalid signature")?;
 
@@ -162,7 +166,7 @@ fn verify_signature(
 async fn register_command<D>(ctx: RouteContext<D>) -> Result<Response> {
 	let guild_id = ctx
 		.param("guild")
-		.and_then(|s| s.strip_prefix("/"))
+		.and_then(|s| s.strip_prefix('/'))
 		.filter(|s| !s.is_empty())
 		.map(|s| s.parse::<Id<GuildMarker>>())
 		.transpose()
@@ -181,7 +185,7 @@ async fn register_command<D>(ctx: RouteContext<D>) -> Result<Response> {
 		.dm_permission(false)
 		.build();
 
-	if let Err(e) = client.create_command(command, guild_id).await {
+	if let Err(e) = client.create_commands(vec![command], guild_id).await {
 		console_error!("Failed to create command: {e}");
 		Response::error("Failed to create command", 500)
 	} else {
