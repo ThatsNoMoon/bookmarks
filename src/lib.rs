@@ -126,9 +126,8 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 				_ => Response::error("Unexpected interaction type", 400),
 			}
 		})
-		.post_async("/register", |_, ctx| async move {
-			console_log!("Registering commands");
-			register_bookmark_command(ctx).await
+		.post_async("/register", |req, ctx| async move {
+			register_bookmark_command(req, ctx).await
 		})
 		.run(req, env)
 		.await
@@ -289,16 +288,48 @@ fn verify_signature(
 }
 
 async fn register_bookmark_command<D>(
+	req: Request,
 	ctx: RouteContext<D>,
 ) -> Result<Response> {
 	let bookmark = CommandBuilder::new(COMMAND_NAME, "", CommandType::Message)
 		.dm_permission(false)
 		.build();
 
+	if let Err(r) = registration_authentication(req, &ctx) {
+		return Ok(r);
+	}
+
+	console_log!("Registering commands");
+
 	if let Err(e) = Client::new(ctx)?.create_commands(vec![bookmark]).await {
 		console_error!("Failed to create command: {e}");
 		Response::error("Failed to create command", 500)
 	} else {
 		Response::empty()
+	}
+}
+
+fn registration_authentication<D>(
+	req: Request,
+	ctx: &RouteContext<D>,
+) -> std::result::Result<(), Response> {
+	let token = match ctx.var("REGISTRATION_TOKEN") {
+		Ok(token) => token.to_string(),
+		Err(_) => return Ok(()),
+	};
+
+	let auth = match req.headers().get("Authorization") {
+		Ok(Some(auth)) => auth,
+		_ => {
+			return Err(
+				Response::error("Missing registration token", 401).unwrap()
+			)
+		}
+	};
+
+	if auth == token {
+		Ok(())
+	} else {
+		Err(Response::error("Incorrect registration token", 401).unwrap())
 	}
 }
