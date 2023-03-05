@@ -164,90 +164,97 @@ async fn bookmark<D>(
 		.get(&target.cast())
 		.context("No resolved message")?;
 
-	let message_link = format!(
-		"{DISCORD}/channels/{}/{}/{}",
-		guild_id, message.channel_id, message.id
-	);
+	let data = if message.content.is_empty() {
+		InteractionResponseDataBuilder::new().content(
+			"⚠ I can't bookmark messages with no text content yet. \
+			Try another message.",
+		)
+	} else {
+		let message_link = format!(
+			"{DISCORD}/channels/{}/{}/{}",
+			guild_id, message.channel_id, message.id
+		);
 
-	let author = {
-		let avatar_url = match message.author.avatar {
-			Some(hash) => {
-				format!("{CDN}/avatars/{}/{}.webp", message.author.id, hash)
-			}
+		let author = {
+			let avatar_url = match message.author.avatar {
+				Some(hash) => {
+					format!("{CDN}/avatars/{}/{}.webp", message.author.id, hash)
+				}
 
-			None => format!(
-				"{CDN}/embed/avatars/{}.png",
-				message.author.discriminator % 5
-			),
+				None => format!(
+					"{CDN}/embed/avatars/{}.png",
+					message.author.discriminator % 5
+				),
+			};
+
+			let image = ImageSource::url(avatar_url)
+				.context("Failed to create avatar image")?;
+
+			EmbedAuthorBuilder::new(&message.author.name)
+				.icon_url(image)
+				.url(&message_link)
 		};
 
-		let image = ImageSource::url(avatar_url)
-			.context("Failed to create avatar image")?;
+		let embed = EmbedBuilder::new()
+			.author(author)
+			.description(&message.content)
+			.timestamp(
+				Timestamp::from_secs(message.id.timestamp() / 1000)
+					.context("Failed to create timestamp")?,
+			)
+			.build();
 
-		EmbedAuthorBuilder::new(&message.author.name)
-			.icon_url(image)
-			.url(&message_link)
-	};
-
-	let embed = EmbedBuilder::new()
-		.author(author)
-		.description(&message.content)
-		.timestamp(
-			Timestamp::from_secs(message.id.timestamp() / 1000)
-				.context("Failed to create timestamp")?,
-		)
-		.build();
-
-	let bookmark = CreateMessage::default()
-		.embeds([embed])
-		.components([Component::ActionRow(ActionRow {
-			components: vec![
-				Component::Button(Button {
-					url: Some(message_link),
-					label: Some("Visit".to_owned()),
-					style: ButtonStyle::Link,
-					disabled: false,
-					emoji: None,
-					custom_id: None,
-				}),
-				Component::Button(Button {
-					custom_id: Some("delete".to_owned()),
-					emoji: Some(ReactionType::Unicode {
-						name: "🗑".to_owned(),
-					}),
-					label: Some("Delete".to_owned()),
-					style: ButtonStyle::Danger,
-					disabled: false,
-					url: None,
-				}),
-			],
-		})])
-		.flags(MessageFlags::SUPPRESS_NOTIFICATIONS);
-
-	let data = match Client::new(ctx)?.send_dm(user.id, &bookmark).await? {
-		Ok((dm_channel, sent_msg)) => {
-			let sent_link = format!(
-				"{DISCORD}/channels/@me/{}/{}",
-				dm_channel.id, sent_msg.id
-			);
-
-			InteractionResponseDataBuilder::new()
-				.content("🔖 Message bookmarked")
-				.components([Component::ActionRow(ActionRow {
-					components: vec![Component::Button(Button {
-						url: Some(sent_link),
+		let bookmark = CreateMessage::default()
+			.embeds([embed])
+			.components([Component::ActionRow(ActionRow {
+				components: vec![
+					Component::Button(Button {
+						url: Some(message_link),
 						label: Some("Visit".to_owned()),
 						style: ButtonStyle::Link,
 						disabled: false,
 						emoji: None,
 						custom_id: None,
-					})],
-				})])
-		}
-		Err(()) => InteractionResponseDataBuilder::new().content(
-			"⚠ I couldn't send you your bookmark. \
+					}),
+					Component::Button(Button {
+						custom_id: Some("delete".to_owned()),
+						emoji: Some(ReactionType::Unicode {
+							name: "🗑".to_owned(),
+						}),
+						label: Some("Delete".to_owned()),
+						style: ButtonStyle::Danger,
+						disabled: false,
+						url: None,
+					}),
+				],
+			})])
+			.flags(MessageFlags::SUPPRESS_NOTIFICATIONS);
+
+		match Client::new(ctx)?.send_dm(user.id, &bookmark).await? {
+			Ok((dm_channel, sent_msg)) => {
+				let sent_link = format!(
+					"{DISCORD}/channels/@me/{}/{}",
+					dm_channel.id, sent_msg.id
+				);
+
+				InteractionResponseDataBuilder::new()
+					.content("🔖 Message bookmarked")
+					.components([Component::ActionRow(ActionRow {
+						components: vec![Component::Button(Button {
+							url: Some(sent_link),
+							label: Some("Visit".to_owned()),
+							style: ButtonStyle::Link,
+							disabled: false,
+							emoji: None,
+							custom_id: None,
+						})],
+					})])
+			}
+			Err(()) => InteractionResponseDataBuilder::new().content(
+				"⚠ I couldn't send you your bookmark. \
 			Make sure you have DMs enabled and try again.",
-		),
+			),
+		}
 	};
 
 	let response = InteractionResponse {
