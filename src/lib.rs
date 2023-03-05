@@ -1,4 +1,4 @@
-use client::CreateMessage;
+use client::{Client, CreateMessage};
 use ed25519_dalek::{ed25519::signature::Signature, PublicKey, Verifier};
 use twilight_model::{
 	application::{
@@ -25,9 +25,11 @@ use twilight_util::{
 	},
 	snowflake::Snowflake,
 };
-use worker::*;
-
-use crate::{client::Client, utils::Context as _};
+use utils::Context as _;
+use worker::{
+	console_error, console_log, event, Context, Env, Error, Request, Response,
+	RouteContext, Router,
+};
 
 mod client;
 mod utils;
@@ -37,6 +39,8 @@ const COMMAND_NAME: &str = "Bookmark message";
 const CDN: &str = "https://cdn.discordapp.com";
 
 const DISCORD: &str = "https://discord.com";
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -101,7 +105,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 					};
 
 					console_log!(
-						r#"Message component "{}" received"#,
+						"Message component {:?} received",
 						data.custom_id
 					);
 
@@ -189,7 +193,7 @@ async fn bookmark<D>(
 		.author(author)
 		.description(&message.content)
 		.timestamp(
-			Timestamp::from_secs(message.id.timestamp() / 1000 as i64)
+			Timestamp::from_secs(message.id.timestamp() / 1000)
 				.context("Failed to create timestamp")?,
 		)
 		.build();
@@ -220,17 +224,14 @@ async fn bookmark<D>(
 		})])
 		.flags(MessageFlags::SUPPRESS_NOTIFICATIONS);
 
-	let (dm_channel, sent_msg) =
-		Client::new(ctx)?.send_dm(user.id, &bookmark).await?;
+	let data = match Client::new(ctx)?.send_dm(user.id, &bookmark).await? {
+		Ok((dm_channel, sent_msg)) => {
+			let sent_link = format!(
+				"{DISCORD}/channels/@me/{}/{}",
+				dm_channel.id, sent_msg.id
+			);
 
-	let sent_link =
-		format!("{DISCORD}/channels/@me/{}/{}", dm_channel.id, sent_msg.id);
-
-	let response = InteractionResponse {
-		kind: InteractionResponseType::ChannelMessageWithSource,
-		data: Some(
 			InteractionResponseDataBuilder::new()
-				.flags(MessageFlags::EPHEMERAL)
 				.content("🔖 Message bookmarked")
 				.components([Component::ActionRow(ActionRow {
 					components: vec![Component::Button(Button {
@@ -242,8 +243,16 @@ async fn bookmark<D>(
 						custom_id: None,
 					})],
 				})])
-				.build(),
+		}
+		Err(()) => InteractionResponseDataBuilder::new().content(
+			"⚠ I couldn't send you your bookmark. \
+			Make sure you have DMs enabled and try again.",
 		),
+	};
+
+	let response = InteractionResponse {
+		kind: InteractionResponseType::ChannelMessageWithSource,
+		data: Some(data.flags(MessageFlags::EPHEMERAL).build()),
 	};
 
 	Response::from_json(&response)

@@ -1,5 +1,5 @@
 use reqwest::{IntoUrl, Method, Response};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use twilight_model::{
 	application::command::Command,
@@ -12,9 +12,9 @@ use twilight_model::{
 		Id,
 	},
 };
-use worker::{Error, Result, RouteContext};
+use worker::{Error, RouteContext};
 
-use crate::utils::Context as _;
+use crate::{utils::Context as _, Result};
 
 const API: &str = "https://discord.com/api/v10";
 
@@ -49,6 +49,12 @@ impl CreateMessage {
 			..self
 		}
 	}
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+	code: u32,
+	message: String,
 }
 
 pub(crate) struct Client {
@@ -91,7 +97,7 @@ impl Client {
 		&mut self,
 		recipient: Id<UserMarker>,
 		message: &CreateMessage,
-	) -> Result<(Channel, Message)> {
+	) -> Result<Result<(Channel, Message), ()>> {
 		let channel: Channel = self
 			.send(
 				Method::POST,
@@ -104,17 +110,39 @@ impl Client {
 			.await
 			.context("Failed to create DM channel")?;
 
-		self.send(
-			Method::POST,
-			format!("{API}/channels/{}/messages", channel.id),
-			message,
-		)
-		.await
-		.context("Failed to send DM")?
-		.json::<Message>()
-		.await
-		.context("Invalid message received")
-		.map(|msg| (channel, msg))
+		let res = self
+			.send_ignore_status(
+				Method::POST,
+				format!("{API}/channels/{}/messages", channel.id),
+				message,
+			)
+			.await?;
+
+		let status = res.status();
+
+		if status.is_server_error() {
+			Err(Error::RustError(format!(
+				"Internal Discord error {}",
+				status
+			)))
+		} else if status.is_client_error() {
+			match res.json::<ErrorResponse>().await {
+				Ok(e) if e.code == 50007 => Ok(Err(())),
+				Ok(e) => Err(Error::RustError(format!(
+					"Failed to send DM: {}",
+					e.message
+				))),
+				Err(_) => Err(Error::RustError(format!(
+					"Unknown Discord error {}",
+					status
+				))),
+			}
+		} else {
+			res.json::<Message>()
+				.await
+				.context("Invalid message received")
+				.map(|msg| Ok((channel, msg)))
+		}
 	}
 
 	pub(crate) async fn delete_message(
@@ -138,15 +166,7 @@ impl Client {
 		url: impl IntoUrl,
 		body: impl Serialize,
 	) -> Result<Response> {
-		let res = self
-			.inner
-			.request(method, url)
-			.header("Authorization", &self.token)
-			.header("Content-Type", "application/json")
-			.json(&body)
-			.send()
-			.await
-			.map_err(|e| Error::RustError(e.to_string()))?;
+		let res = self.send_ignore_status(method, url, body).await?;
 
 		if res.status().is_client_error() {
 			let msg = res
@@ -157,5 +177,21 @@ impl Client {
 		} else {
 			res.error_for_status().context("Discord error")
 		}
+	}
+
+	async fn send_ignore_status(
+		&mut self,
+		method: Method,
+		url: impl IntoUrl,
+		body: impl Serialize,
+	) -> Result<Response> {
+		self.inner
+			.request(method, url)
+			.header("Authorization", &self.token)
+			.header("Content-Type", "application/json")
+			.json(&body)
+			.send()
+			.await
+			.map_err(|e| Error::RustError(e.to_string()))
 	}
 }
